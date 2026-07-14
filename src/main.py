@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-# Add both src and riddles to path
 base = Path(__file__).parent.parent
 sys.path.insert(0, str(base / "src"))
 sys.path.insert(0, str(base / "riddles"))
@@ -21,11 +20,9 @@ def main():
     thumb_gen = ThumbnailGenerator()
     meta_gen = MetadataGenerator()
     
-    # Select riddle based on hour of day
     hour = datetime.now().hour
     day_of_year = datetime.now().timetuple().tm_yday
     
-    # Calculate riddle index (cycles through database)
     riddle_index = (day_of_year * 24 + hour) % len(RIDDLE_DATABASE)
     riddle = RIDDLE_DATABASE[riddle_index]
     
@@ -45,6 +42,22 @@ def main():
     metadata = meta_gen.generate_all(riddle)
     print("Title: " + metadata["title"])
     print("Hashtags: " + str(metadata["hashtags"]))
+    
+    # Upload to YouTube
+    try:
+        from youtube_uploader import YouTubeUploader
+        uploader = YouTubeUploader()
+        video_id = uploader.upload_short(
+            video_path=str(video_path),
+            title=metadata["title"],
+            description=metadata["description"],
+            tags=metadata["tags"],
+            thumbnail_path=thumbnail_path
+        )
+        print("YouTube upload successful! Video ID: " + video_id)
+    except Exception as e:
+        print("YouTube upload failed: " + str(e))
+        print("Video saved locally but not uploaded.")
     
     print("Pipeline complete!")
 
