@@ -2,9 +2,8 @@ name: Post YouTube Short
 
 on:
   schedule:
-    # Run every hour (24 times a day)
     - cron: '0 * * * *'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   post-short:
@@ -13,7 +12,19 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+      with:
+        ref: main
+        fetch-depth: 1
+        
+    - name: Debug - List files
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Files in root:"
+        ls -la
+        echo "Files in src:"
+        ls -la src/
+        
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -27,6 +38,7 @@ jobs:
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
+        cat requirements.txt
         pip install -r requirements.txt
         
     - name: Generate and upload video
@@ -37,7 +49,7 @@ jobs:
       run: |
         python src/main.py
         
-    - name: Upload artifacts (for debugging)
+    - name: Upload artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
