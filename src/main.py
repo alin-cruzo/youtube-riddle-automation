@@ -39,7 +39,7 @@ def main():
 
     print("\n[3/6] Generating deep, mysterious voiceover...")
     voice_gen = VoiceoverGenerator()
-    script, voiceover_path, word_timings = voice_gen.generate_riddle_voiceover(
+    script, voiceover_path, word_timings, sentence_timings = voice_gen.generate_riddle_voiceover(
         riddle["data"], riddle["hook"], filename=f"voice_{riddle['id']}.mp3"
     )
     print(f"  Script length: {len(script.split())} words, timings captured: {len(word_timings)}")
@@ -71,7 +71,8 @@ def main():
         scene_image_map[-1] = (last_img, max(last_count + diff, 1))
 
     word_schedule, total_duration = video_gen.build_word_schedule(
-        script, word_timings, fallback_total_duration=max(total_script_words * 0.38, 8)
+        script, word_timings, sentence_timings,
+        fallback_total_duration=max(total_script_words * 0.38, 8)
     )
 
     video_filename = f"short_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"

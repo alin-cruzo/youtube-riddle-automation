@@ -10,7 +10,7 @@ into it.
 
 from PIL import Image, ImageDraw, ImageFont
 
-NORMAL_COLOR = (45, 45, 45, 255)
+NORMAL_COLOR = (255, 255, 255, 255)
 HIGHLIGHT_COLOR = (255, 196, 0, 255)
 SAFE_WIDTH = 900          # max caption width in px (1080 frame, generous margin)
 DEFAULT_FONT_SIZE = 64
@@ -81,6 +81,13 @@ class CaptionEngine:
         """
         Draws the caption line containing active_word_index onto background_img
         (a PIL RGB/RGBA Image) and returns the composited image.
+
+        IMPORTANT: this returns a true RGBA image with a real alpha channel —
+        do NOT flatten it to RGB here. video_generator.py relies on the
+        alpha channel to build a MoviePy mask so only the drawn text pixels
+        are opaque and the video background shows through everywhere else.
+        Converting to RGB at this stage silently turns every "transparent"
+        pixel into solid black, which blacks out the whole video frame.
         """
         lines, word_to_line, resolved_size = self.build_lines(full_text, font_size)
         words = full_text.split()
@@ -113,7 +120,7 @@ class CaptionEngine:
 
         base = background_img.convert("RGBA")
         composed = Image.alpha_composite(base, overlay)
-        return composed.convert("RGB")
+        return composed
 
 
 if __name__ == "__main__":

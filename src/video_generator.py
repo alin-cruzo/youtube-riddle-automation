@@ -1,8 +1,7 @@
 """
 Cinematic Video Generator
-AI images (Ken Burns zoom) + karaoke captions + deep mysterious voiceover,
-mixed with low-volume background music. Replaces the old flat-illustration
-scene_builder.py / simple_video.py pipeline.
+AI images (Ken Burns zoom) + karaoke/sentence captions + deep mysterious voiceover,
+mixed with low-volume background music.
 """
 
 import os
@@ -39,21 +38,52 @@ class CinematicVideoGenerator:
     # ---------- word/scene timing ----------
 
     def _estimate_word_durations(self, words, total_duration):
-        """Fallback when no real TTS timings are available: weight each
-        word's share of the total duration by character length so short
-        words don't linger and long words aren't clipped."""
+        """Length-weighted split of a duration across a list of words."""
         weights = [max(len(w), 2) for w in words]
         total_w = sum(weights)
         return [total_duration * (w / total_w) for w in weights]
 
-    def build_word_schedule(self, script, word_timings, fallback_total_duration=45.0):
+    def _schedule_from_sentence_timings(self, words, sentences, sentence_timings):
+        """
+        Distributes word-level start/duration within each sentence's real
+        offset/duration window, proportional to word length. Falls back to
+        None if the sentence count doesn't line up with the timing count —
+        caller should treat None as "use full estimate instead".
+        """
+        if len(sentences) != len(sentence_timings):
+            print(f"  [video_generator] WARNING: sentence split ({len(sentences)}) "
+                  f"doesn't match sentence_timings ({len(sentence_timings)}), "
+                  f"falling back to full estimate")
+            return None
+
+        schedule = []
+        word_cursor = 0
+        for sent_words, timing in zip(sentences, sentence_timings):
+            sent_start = timing["offset_sec"]
+            sent_duration = max(timing["duration_sec"], 0.1)
+            durations = self._estimate_word_durations(sent_words, sent_duration)
+            cursor = sent_start
+            for i, d in enumerate(durations):
+                schedule.append((word_cursor, cursor, d))
+                cursor += d
+                word_cursor += 1
+        return schedule
+
+    def build_word_schedule(self, script, word_timings=None, sentence_timings=None,
+                             fallback_total_duration=45.0):
         """
         Returns (schedule, total_duration). schedule is a list of
         (word_idx, start_sec, duration_sec) covering the whole script.
-        Uses real edge-tts WordBoundary timings when available, otherwise
-        falls back to a length-weighted estimate.
+
+        Tries, in order:
+          1. real per-word WordBoundary timings (best case)
+          2. per-sentence SentenceBoundary timings, words distributed
+             proportionally within each sentence's real window
+          3. fully estimated duration split (last resort)
         """
         words = script.split()
+
+        # Tier 1: real word-level timings
         if word_timings and len(word_timings) >= len(words) * 0.8:
             schedule = []
             for i, t in enumerate(word_timings[: len(words)]):
@@ -61,6 +91,15 @@ class CinematicVideoGenerator:
             total = word_timings[-1]["offset_sec"] + word_timings[-1]["duration_sec"]
             return schedule, total
 
+        # Tier 2: sentence-level timings
+        if sentence_timings:
+            sentences = self._split_into_sentence_word_groups(script)
+            schedule = self._schedule_from_sentence_timings(words, sentences, sentence_timings)
+            if schedule is not None:
+                total = sentence_timings[-1]["offset_sec"] + sentence_timings[-1]["duration_sec"]
+                return schedule, total
+
+        # Tier 3: fully estimated
         durations = self._estimate_word_durations(words, fallback_total_duration)
         schedule, cursor = [], 0.0
         for i, d in enumerate(durations):
@@ -68,9 +107,14 @@ class CinematicVideoGenerator:
             cursor += d
         return schedule, cursor
 
+    def _split_into_sentence_word_groups(self, script):
+        """Splits script into sentences on . ? ! and returns each sentence's
+        words as a list, e.g. [["Someone", "was", ...], ["Only", "one", ...]]."""
+        import re
+        raw_sentences = re.split(r'(?<=[.?!])\s+', script.strip())
+        return [s.split() for s in raw_sentences if s.strip()]
+
     def map_words_to_scenes(self, scene_image_map):
-        """scene_image_map: [(image_path, word_count), ...] in speaking order.
-        Returns [(image_path, start_word_idx, end_word_idx), ...]."""
         scenes, cursor = [], 0
         for image_path, count in scene_image_map:
             scenes.append((image_path, cursor, cursor + count))
@@ -100,24 +144,42 @@ class CinematicVideoGenerator:
         return clip.fl(zoom)
 
     def _caption_clip_for_scene(self, script, scene_words):
-        """Builds one concatenated caption track covering a scene's word slice,
-        each word shown for its own scheduled duration."""
+        """Builds one concatenated caption track covering a scene's word slice.
+
+        IMPORTANT: this expects self.captions.render_frame() to return an
+        RGBA image with real per-pixel alpha (transparent everywhere except
+        the drawn text). If render_frame internally converts to RGB or
+        pastes without a mask, overlay.convert("RGBA") below will silently
+        manufacture a fully-opaque alpha channel (all 255) and you'll be
+        back to a black box over your background — just without a crash.
+        See caption_engine.py's render_frame if that happens.
+        """
         sub_clips = []
         for word_idx, _start, duration in scene_words:
             overlay = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
             overlay = self.captions.render_frame(overlay, script, word_idx)
-            sub_clips.append(ImageClip(np.array(overlay)).set_duration(duration))
+
+            if overlay.mode != "RGBA":
+                print(f"  [video_generator] WARNING: render_frame returned mode "
+                      f"'{overlay.mode}', expected 'RGBA' — captions may render "
+                      f"as an opaque block. Check caption_engine.py.")
+                overlay = overlay.convert("RGBA")
+
+            arr = np.array(overlay)
+            rgb = arr[:, :, :3]
+            alpha = arr[:, :, 3] / 255.0
+
+            img_clip = ImageClip(rgb).set_duration(duration)
+            mask_clip = ImageClip(alpha, ismask=True).set_duration(duration)
+            img_clip = img_clip.set_mask(mask_clip)
+
+            sub_clips.append(img_clip)
         return concatenate_videoclips(sub_clips, method="compose")
 
     # ---------- main build ----------
 
     def generate_video(self, script, scene_image_map, word_schedule,
                         filename="output.mp4", voiceover_path=None, music_path=None):
-        """
-        script: full narration text (same word order the voiceover speaks)
-        scene_image_map: [(image_path, word_count), ...] in speaking order
-        word_schedule: [(word_idx, start_sec, duration_sec), ...]
-        """
         if not MOVIEPY_AVAILABLE:
             raise ImportError("moviepy is required: pip install moviepy==1.0.3")
 
@@ -144,13 +206,15 @@ class CinematicVideoGenerator:
             audio_layers.append(AudioFileClip(str(voiceover_path)).volumex(0.95))
 
         music_path = music_path or (self.assets_dir / "music" / "mystery_bg.mp3")
-        if music_path and os.path.exists(str(music_path)):
+        if music_path and os.path.exists(str(music_path)) and os.path.getsize(str(music_path)) > 10_000:
             music = AudioFileClip(str(music_path))
             if music.duration < final_video.duration:
                 loops = int(final_video.duration / music.duration) + 1
                 music = concatenate_audioclips([music] * loops)
             music = music.subclip(0, final_video.duration).volumex(0.10)
             audio_layers.append(music)
+        elif music_path and os.path.exists(str(music_path)):
+            print(f"  [video_generator] music file too small ({os.path.getsize(str(music_path))} bytes), skipping background music")
 
         if audio_layers:
             final_video = final_video.set_audio(CompositeAudioClip(audio_layers))
