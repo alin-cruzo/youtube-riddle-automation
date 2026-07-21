@@ -11,6 +11,15 @@ Uniqueness strategy:
     signature collides with recent history.
   - The pool sizes below give tens of thousands of possible combinations, so
     collisions are rare and the retry loop resolves them almost immediately.
+
+Hook generation:
+  - Previously pulled from a fixed pool of generic lines ("Detectives say if
+    you can solve this...") that said nothing about the actual case. Average
+    view duration data showed viewers dropping off within ~6 seconds -- right
+    around where the generic hook line was still playing before any real
+    crime detail arrived. generate_hook() now builds the opening line from
+    THIS riddle's actual setting/cause/suspect count, so the specific stakes
+    are the very first thing said, not a warm-up sentence before them.
 """
 
 import json
@@ -101,12 +110,36 @@ SUSPECT_POOL = [
     ]},
 ]
 
-HOOK_LINES = [
-    "Detectives say if you can solve this, you are either a genius or a psychopath.",
-    "Only a true detective can crack this case in one watch.",
-    "This case stumped the entire precinct. Can you do better?",
-    "Five suspects. One lie. Can you catch it?",
+# Templates below get filled with THIS riddle's actual setting/cause/suspect
+# count -- no generic filler line before the real stakes arrive.
+HOOK_TEMPLATES = [
+    "Found dead at {setting}. Killed by {cause}. {num_suspects} suspects — only one is lying.",
+    "{cause_cap} at {setting}. {num_suspects} suspects. One of them is lying.",
+    "A body. {cause}. {num_suspects} suspects — can you catch the liar?",
+    "{num_suspects} suspects. One killer. Death by {cause} at {setting}.",
 ]
+
+
+def _strip_article(text):
+    if text.startswith("an "):
+        return text[3:]
+    if text.startswith("a "):
+        return text[2:]
+    return text
+
+
+def generate_hook(setting, cause, num_suspects):
+    setting_short = _strip_article(setting)
+    cause_short = _strip_article(cause)
+    cause_cap = cause_short[0].upper() + cause_short[1:]
+
+    template = random.choice(HOOK_TEMPLATES)
+    return template.format(
+        setting=setting_short,
+        cause=cause_short,
+        cause_cap=cause_cap,
+        num_suspects=num_suspects,
+    )
 
 
 def _signature(setting, cause, suspects):
@@ -161,7 +194,7 @@ def generate_riddle(riddle_id=None):
     riddle = {
         "id": riddle_id or f"gen_{random.randint(100000, 999999)}",
         "title": f"Murder at {setting.title()}",
-        "hook": random.choice(HOOK_LINES),
+        "hook": generate_hook(setting, cause, num_suspects),
         "victim": victim,
         "setting": setting,
         "cause": cause,
@@ -183,7 +216,8 @@ if __name__ == "__main__":
     seen_titles = set()
     for i in range(10):
         r = generate_riddle()
-        print(f"{i+1}. {r['title']} — cause: {r['cause']} — answer: {r['answer']}")
+        print(f"{i+1}. HOOK: {r['hook']}")
+        print(f"   {r['title']} — cause: {r['cause']} — answer: {r['answer']}")
         for s in r["data"]["suspects"]:
             print(f"     {s['name']}: {s['alibi']}")
         seen_titles.add(r["title"])
